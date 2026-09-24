@@ -17,22 +17,27 @@ on:
         type: choice
         options:
         - twrp-14.1
+
       DEVICE_TREE:
         description: 'TWRP Device Tree'
         required: true
         default: 'https://github.com/wndelix/android_device_motorola_lamu_twrp'
+
       DEVICE_TREE_BRANCH:
         description: 'TWRP Device Tree Branch'
         required: true
         default: 'twrp-14.1'
+
       DEVICE_PATH:
         description: 'Specify your Device Path'
         required: true
         default: 'device/motorola/lamu'
+
       DEVICE_NAME:
         description: 'Specify your Device Codename'
         required: true
         default: 'lamu'
+
       BUILD_TARGET:
         description: 'Specify your Build Target'
         required: true
@@ -42,6 +47,7 @@ on:
         - boot
         - recovery
         - vendorboot
+
       USE_CCACHE:
         description: Use ccache for compilation
         type: boolean
@@ -52,38 +58,119 @@ jobs:
   build:
     name: Build TWRP for ${{ inputs.DEVICE_NAME }}
     runs-on: ubuntu-22.04
+
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     permissions:
       contents: write
+
     steps:
+
+    # ============================================================
+    # CLEAN UP
+    # ============================================================
+
     - name: Clean-up
       uses: rokibhasansagar/slimhub_actions@main
 
+
+    # ============================================================
+    # BUILD ENVIRONMENT
+    # ============================================================
+
     - name: Build Environment
       run: |
-        sudo apt install aria2 linux-modules-extra-$(uname -r) zram-tools -y
-        git clone https://gitlab.com/OrangeFox/misc/scripts.git -b master
+        set -e
+
+        sudo apt update
+
+        sudo apt install \
+          aria2 \
+          linux-modules-extra-$(uname -r) \
+          zram-tools \
+          -y
+
+        git clone \
+          https://gitlab.com/OrangeFox/misc/scripts.git \
+          -b master
+
         cd scripts
+
         sudo bash setup/android_build_env.sh
-        cd .. && rm -rf scripts
-        # Garante que o comando `repo` esteja disponível
+
+        cd ..
+
+        rm -rf scripts
+
+        # Garante que o comando repo esteja disponível
         if ! command -v repo >/dev/null 2>&1; then
-          sudo curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
+          sudo curl -fsSL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o /usr/local/bin/repo
+
           sudo chmod a+rx /usr/local/bin/repo
         fi
+
+        echo
+        echo "=========================================="
+        echo " TOOLCHAIN CHECK"
+        echo "=========================================="
+
+        echo "Git:"
+        git --version
+
+        echo
+        echo "Repo:"
+        repo --version
+
+        echo
+        echo "Python:"
+        python3 --version
+
+        echo
+        echo "Java:"
+        java -version 2>&1 || true
+
+        echo
+        echo "Ninja:"
+        ninja --version
+
+        echo
+        echo "Make:"
+        make --version | head -n 1
+
+        echo
+        echo "CCache:"
+        ccache --version | head -n 1 || true
+
         # Redundant apt cleanup
         sudo apt autoclean >/dev/null || true
         sudo apt autoremove -qy 2>/dev/null || true
         sudo rm -rf /var/cache/apt/archives/ 2>/dev/null || true
+
+
+    # ============================================================
+    # MAXIMIZE BUILD SPACE
+    # ============================================================
 
     - name: Maximize build space
       uses: easimon/maximize-build-space@master
       with:
         root-reserve-mb: '3072'
 
+
+    # ============================================================
+    # CHECKOUT
+    # ============================================================
+
     - name: Checkout
       uses: actions/checkout@main
+
+
+    # ============================================================
+    # CCACHE
+    # ============================================================
 
     - name: Setup ccache
       uses: hendrikmuhs/ccache-action@v1.2
@@ -92,194 +179,538 @@ jobs:
         max-size: "2G"
         create-symlink: true
 
+
+    # ============================================================
+    # ZRAM
+    # ============================================================
+
     - name: Setup zram
       run: |
+        set -e
+
         sudo modprobe zram
-        sudo sed -i 's/^#PERCENT=50/PERCENT=90/' /etc/default/zramswap
-        sudo sed -i 's/^#PRIORITY=100/PRIORITY=1000/' /etc/default/zramswap
+
+        sudo sed -i \
+          's/^#PERCENT=50/PERCENT=90/' \
+          /etc/default/zramswap
+
+        sudo sed -i \
+          's/^#PRIORITY=100/PRIORITY=1000/' \
+          /etc/default/zramswap
+
         sudo systemctl restart zramswap
+
+        echo
+        echo "=========================================="
+        echo " ZRAM"
+        echo "=========================================="
+
         zramctl
+
+        echo
+        free -h
+
+
+    # ============================================================
+    # SETUP MANIFEST
+    # ============================================================
 
     - name: Set-up Manifest
       run: |
+        set -e
+
         mkdir -p ${GITHUB_WORKSPACE}/TWRP
+
         cd ${GITHUB_WORKSPACE}/TWRP
+
         git config --global user.name "${{ github.actor }}"
-        git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+
+        git config --global user.email \
+          "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+
         git config --global color.ui false
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ inputs.MANIFEST_BRANCH }}
-        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+        echo
+        echo "=========================================="
+        echo " REPO INIT"
+        echo "=========================================="
+
+        repo init \
+          --depth=1 \
+          -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+          -b ${{ inputs.MANIFEST_BRANCH }}
+
+        echo
+        echo "=========================================="
+        echo " REPO SYNC"
+        echo "=========================================="
+
+        repo sync \
+          -c \
+          -j$(nproc --all) \
+          --force-sync \
+          --no-clone-bundle \
+          --no-tags
+
+        echo
+        echo "=========================================="
+        echo " REPO STATUS"
+        echo "=========================================="
+
+        repo manifest -r | head -n 50
+
+
+    # ============================================================
+    # CLONE DEVICE TREE
+    # ============================================================
 
     - name: Clone Device Tree
       run: |
+        set -e
+
         cd ${GITHUB_WORKSPACE}/TWRP
-        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
+
+        echo
+        echo "=========================================="
+        echo " CLONING DEVICE TREE"
+        echo "=========================================="
+
+        git clone \
+          ${{ inputs.DEVICE_TREE }} \
+          -b ${{ inputs.DEVICE_TREE_BRANCH }} \
+          ./${{ inputs.DEVICE_PATH }}
+
         cd ${{ inputs.DEVICE_PATH }}
+
+        echo "Device Tree:"
+        pwd
+
+        echo
+        echo "Commit:"
+        git log -1 --oneline
+
+        echo
+        echo "Branch:"
+        git branch --show-current
+
+        echo
+        echo "Remote:"
+        git remote -v
+
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+
+    # ============================================================
+    # DEVICE TREE DIAGNOSTICS
+    # ============================================================
+
+    - name: Diagnose Device Tree
+      run: |
+        cd ${GITHUB_WORKSPACE}/TWRP
+
+        echo
+        echo "=========================================="
+        echo " DEVICE TREE STRUCTURE"
+        echo "=========================================="
+
+        echo "Device path:"
+        echo "${{ inputs.DEVICE_PATH }}"
+
+        echo
+        echo "--- Top level ---"
+
+        find "${{ inputs.DEVICE_PATH }}" \
+          -maxdepth 2 \
+          -type f \
+          | sort \
+          | head -n 200
+
+        echo
+        echo "=========================================="
+        echo " TASK PROFILES IN DEVICE TREE"
+        echo "=========================================="
+
+        find "${{ inputs.DEVICE_PATH }}" \
+          \( -name "task_profiles.json" \
+          -o -name "task_profiles_*.json" \) \
+          -print
+
+        echo
+        echo "=========================================="
+        echo " TASK PROFILES CONTENT"
+        echo "=========================================="
+
+        if [[ -f "${{ inputs.DEVICE_PATH }}/recovery/root/system/etc/task_profiles.json" ]]; then
+          echo "--- device tree task_profiles.json ---"
+
+          sed -n '1,240p' \
+            "${{ inputs.DEVICE_PATH }}/recovery/root/system/etc/task_profiles.json"
+        else
+          echo "Device tree task_profiles.json NOT FOUND"
+        fi
+
+
+    # ============================================================
+    # SOURCE TASK PROFILE DIAGNOSTICS
+    # ============================================================
+
+    - name: Diagnose Source Task Profiles
+      run: |
+        cd ${GITHUB_WORKSPACE}/TWRP
+
+        echo
+        echo "=========================================="
+        echo " SOURCE TASK PROFILES"
+        echo "=========================================="
+
+        echo "--- Files ---"
+
+        find system/core/libprocessgroup/profiles \
+          \( -name "task_profiles.json" \
+          -o -name "task_profiles_*.json" \) \
+          -print \
+          2>/dev/null || true
+
+        echo
+        echo "--- Android.bp ---"
+
+        if [[ -f system/core/libprocessgroup/profiles/Android.bp ]]; then
+          sed -n '1,180p' \
+            system/core/libprocessgroup/profiles/Android.bp
+        else
+          echo "Android.bp NOT FOUND"
+        fi
+
+        echo
+        echo "--- Module references ---"
+
+        grep -R \
+          'name: "task_profiles.json"' \
+          -n system/core/libprocessgroup \
+          2>/dev/null || true
+
+        echo
+        echo "--- All task_profiles references ---"
+
+        grep -R \
+          "task_profiles.json" \
+          -n \
+          --exclude-dir=.git \
+          --exclude-dir=.repo \
+          --exclude-dir=out \
+          system/core/libprocessgroup \
+          2>/dev/null || true
+
+
+    # ============================================================
+    # BUILD TWRP
+    # ============================================================
 
     - name: Building TWRP
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
 
-        echo "=========================================="
-        echo " DEBUG: task_profiles.json no source"
-        echo "=========================================="
-
-        echo "--- Arquivos encontrados ---"
-        find . \
-          \( -name "task_profiles.json" -o -name "task_profiles_*.json" \) \
-          -not -path "./.repo/*" \
-          -not -path "./out/*" \
-          -print || true
-
-        echo
-        echo "--- Referências a task_profiles.json ---"
-        grep -R "task_profiles.json" -n \
-          --exclude-dir=.git \
-          --exclude-dir=.repo \
-          --exclude-dir=out \
-          . 2>/dev/null || true
-
-        echo
-        echo "--- Referências a task_profiles_30.json ---"
-        grep -R "task_profiles_30.json" -n \
-          --exclude-dir=.git \
-          --exclude-dir=.repo \
-          --exclude-dir=out \
-          . 2>/dev/null || true
-
-        echo
-        echo "=========================================="
-        echo " DEBUG: configuração do dispositivo"
-        echo "=========================================="
-
-        echo "--- Device Tree ---"
-        git -C "${{ inputs.DEVICE_PATH }}" status --short
-        git -C "${{ inputs.DEVICE_PATH }}" log -1 --oneline
-
-        echo
-        echo "--- device.mk ---"
-        if [[ -f "${{ inputs.DEVICE_PATH }}/device.mk" ]]; then
-          sed -n '1,240p' "${{ inputs.DEVICE_PATH }}/device.mk"
-        fi
-
-        echo
-        echo "--- BoardConfig.mk ---"
-        if [[ -f "${{ inputs.DEVICE_PATH }}/BoardConfig.mk" ]]; then
-          sed -n '1,280p' "${{ inputs.DEVICE_PATH }}/BoardConfig.mk"
-        fi
-
-        echo
-        echo "=========================================="
-        echo " BUILD"
-        echo "=========================================="
-
         set +e
+
+        echo
+        echo "=========================================="
+        echo " BUILD CONFIGURATION"
+        echo "=========================================="
+
+        echo "Device: ${{ inputs.DEVICE_NAME }}"
+        echo "Target: ${{ inputs.BUILD_TARGET }}"
+        echo "Manifest: ${{ inputs.MANIFEST_BRANCH }}"
+        echo "Device Tree: ${{ inputs.DEVICE_TREE }}"
+        echo "Device Branch: ${{ inputs.DEVICE_TREE_BRANCH }}"
+
+        # --------------------------------------------------------
+        # CCACHE
+        # --------------------------------------------------------
 
         if [[ ${{ inputs.USE_CCACHE }} == true ]]; then
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
 
+          echo
+          echo "CCache enabled."
+
           if [[ -f build/soong/ui/build/sandbox_linux.go ]]; then
-            sed -i 's/return sandboxConfig\.working/return false/g' \
+            sed -i \
+              's/return sandboxConfig\.working/return false/g' \
               build/soong/ui/build/sandbox_linux.go
           fi
+        else
+          echo
+          echo "CCache disabled."
         fi
 
+        # --------------------------------------------------------
+        # CLEAN OUT
+        # --------------------------------------------------------
+
         rm -rf "${OUT_DIR:-out}"
+
+        # --------------------------------------------------------
+        # ENVSETUP
+        # --------------------------------------------------------
 
         source build/envsetup.sh
 
         export ALLOW_MISSING_DEPENDENCIES=true
 
+        # --------------------------------------------------------
+        # LUNCH
+        # --------------------------------------------------------
+
         lunch twrp_${{ inputs.DEVICE_NAME }}-ap2a-eng
 
         echo
         echo "=========================================="
-        echo " DEBUG: PRODUCT_OUT"
+        echo " BUILD VARIABLES"
         echo "=========================================="
 
         echo "OUT_DIR=${OUT_DIR:-out}"
-        echo "PRODUCT_OUT=${PRODUCT_OUT:-não definido}"
+        echo "PRODUCT_OUT=${PRODUCT_OUT:-not-set}"
 
-        echo
-        echo "--- task_profiles antes do build ---"
-        find "${PRODUCT_OUT:-out/target/product/${{ inputs.DEVICE_NAME }}}" \
-          -name "task_profiles*.json" \
-          -print 2>/dev/null || true
+        # --------------------------------------------------------
+        # CHECK SOURCE TASK PROFILES
+        # --------------------------------------------------------
 
         echo
         echo "=========================================="
-        echo " EXECUTANDO BUILD"
+        echo " TASK PROFILES BEFORE BUILD"
+        echo "=========================================="
+
+        find system/core/libprocessgroup/profiles \
+          \( -name "task_profiles.json" \
+          -o -name "task_profiles_*.json" \) \
+          -print \
+          2>/dev/null || true
+
+        # --------------------------------------------------------
+        # BUILD
+        # --------------------------------------------------------
+
+        echo
+        echo "=========================================="
+        echo " STARTING BUILD"
         echo "=========================================="
 
         mka adbd ${{ inputs.BUILD_TARGET }}image
+
         BUILD_STATUS=$?
 
-        echo
-        echo "=========================================="
-        echo " DEBUG: estado após o build"
-        echo "=========================================="
-
-        echo "--- task_profiles encontrados no OUT ---"
-        find "${PRODUCT_OUT:-out/target/product/${{ inputs.DEVICE_NAME }}}" \
-          -name "task_profiles*.json" \
-          -print 2>/dev/null || true
+        # ========================================================
+        # POST-BUILD DIAGNOSTICS
+        # ========================================================
 
         echo
-        echo "--- caminho esperado pelo erro ---"
-        EXPECTED="${PRODUCT_OUT:-out/target/product/${{ inputs.DEVICE_NAME }}}/system/etc/task_profiles.json"
+        echo "=========================================="
+        echo " POST-BUILD DIAGNOSTICS"
+        echo "=========================================="
 
-        if [[ -f "$EXPECTED" ]]; then
-          echo "ENCONTRADO: $EXPECTED"
-          ls -lh "$EXPECTED"
+        echo
+        echo "--- PRODUCT_OUT ---"
+
+        echo "${PRODUCT_OUT:-not-set}"
+
+        PRODUCT_DIR="${PRODUCT_OUT:-out/target/product/${{ inputs.DEVICE_NAME }}}"
+
+        echo
+        echo "--- task_profiles in PRODUCT_OUT ---"
+
+        find "$PRODUCT_DIR" \
+          \( -name "task_profiles.json" \
+          -o -name "task_profiles_*.json" \) \
+          -print \
+          2>/dev/null || true
+
+        echo
+        echo "=========================================="
+        echo " EXPECTED FILE"
+        echo "=========================================="
+
+        EXPECTED_TASK_PROFILE="$PRODUCT_DIR/system/etc/task_profiles.json"
+
+        echo "Expected:"
+        echo "$EXPECTED_TASK_PROFILE"
+
+        if [[ -f "$EXPECTED_TASK_PROFILE" ]]; then
+          echo
+          echo "FOUND:"
+          ls -lh "$EXPECTED_TASK_PROFILE"
+
+          echo
+          echo "SHA256:"
+          sha256sum "$EXPECTED_TASK_PROFILE"
         else
-          echo "AUSENTE: $EXPECTED"
+          echo
+          echo "NOT FOUND"
         fi
 
         echo
-        echo "--- arquivos task_profiles no source e OUT ---"
+        echo "=========================================="
+        echo " SOURCE FILES"
+        echo "=========================================="
+
         find . \
-          \( -name "task_profiles.json" -o -name "task_profiles_*.json" \) \
+          \( -name "task_profiles.json" \
+          -o -name "task_profiles_*.json" \) \
           -not -path "./.repo/*" \
-          -print 2>/dev/null || true
+          -print \
+          2>/dev/null || true
 
         echo
+        echo "=========================================="
+        echo " DEVICE TREE FILE"
+        echo "=========================================="
+
+        DEVICE_TASK_PROFILE="${{ inputs.DEVICE_PATH }}/recovery/root/system/etc/task_profiles.json"
+
+        if [[ -f "$DEVICE_TASK_PROFILE" ]]; then
+          ls -lh "$DEVICE_TASK_PROFILE"
+
+          echo
+          echo "SHA256:"
+          sha256sum "$DEVICE_TASK_PROFILE"
+        else
+          echo "Device tree task_profiles.json NOT FOUND"
+        fi
+
+        echo
+        echo "=========================================="
+        echo " COMPARE SOURCE FILES"
+        echo "=========================================="
+
+        SOURCE_TASK_PROFILE="system/core/libprocessgroup/profiles/task_profiles.json"
+        SOURCE_TASK_PROFILE_30="system/core/libprocessgroup/profiles/task_profiles_30.json"
+
+        if [[ -f "$SOURCE_TASK_PROFILE" ]]; then
+          echo "task_profiles.json:"
+          sha256sum "$SOURCE_TASK_PROFILE"
+        fi
+
+        if [[ -f "$SOURCE_TASK_PROFILE_30" ]]; then
+          echo "task_profiles_30.json:"
+          sha256sum "$SOURCE_TASK_PROFILE_30"
+        fi
+
+        if [[ -f "$DEVICE_TASK_PROFILE" ]]; then
+          echo "device tree task_profiles.json:"
+          sha256sum "$DEVICE_TASK_PROFILE"
+        fi
+
+        echo
+        echo "=========================================="
+        echo " SYSTEM/ETC CONTENT"
+        echo "=========================================="
+
+        if [[ -d "$PRODUCT_DIR/system/etc" ]]; then
+          ls -lah "$PRODUCT_DIR/system/etc" | head -n 100
+        else
+          echo "$PRODUCT_DIR/system/etc does not exist"
+        fi
+
+        echo
+        echo "=========================================="
+        echo " RECOVERY ROOT TASK PROFILES"
+        echo "=========================================="
+
+        if [[ -d "$PRODUCT_DIR/recovery/root/system/etc" ]]; then
+          find "$PRODUCT_DIR/recovery/root/system/etc" \
+            -maxdepth 3 \
+            -iname "*task*" \
+            -print \
+            2>/dev/null || true
+        fi
+
+        echo
+        echo "=========================================="
+        echo " NINJA REFERENCES"
+        echo "=========================================="
+
+        if [[ -f build.ninja ]]; then
+          grep -n \
+            "task_profiles.json" \
+            build.ninja \
+            2>/dev/null | head -n 100 || true
+        fi
+
+        if [[ -f "$PRODUCT_DIR/obj/FAKE/twrp_ramdisk_intermediates/twrp_ramdisk-timestamp" ]]; then
+          echo
+          echo "twrp_ramdisk timestamp exists."
+        fi
+
+        echo
+        echo "=========================================="
+        echo " BUILD STATUS"
+        echo "=========================================="
+
         echo "Build exit status: $BUILD_STATUS"
 
         exit $BUILD_STATUS
 
+
+    # ============================================================
+    # SET RELEASE PROPERTIES
+    # ============================================================
+
     - name: Set Release Properties
+      if: success()
       run: |
         echo "BUILD_DATE=$(TZ=America/Sao_Paulo date +%Y%m%d)" >> $GITHUB_ENV
+
         cd ${GITHUB_WORKSPACE}/TWRP
 
-        # O nome do .img gerado varia conforme o target
         case "${{ inputs.BUILD_TARGET }}" in
-          vendorboot) IMAGE_NAME="vendor_boot.img" ;;
-          recovery)   IMAGE_NAME="recovery.img" ;;
-          boot)       IMAGE_NAME="boot.img" ;;
+          vendorboot)
+            IMAGE_NAME="vendor_boot.img"
+            ;;
+          recovery)
+            IMAGE_NAME="recovery.img"
+            ;;
+          boot)
+            IMAGE_NAME="boot.img"
+            ;;
         esac
+
         IMAGE_PATH="TWRP/out/target/product/${{ inputs.DEVICE_NAME }}/${IMAGE_NAME}"
+
         test -f "${GITHUB_WORKSPACE}/${IMAGE_PATH}"
+
         echo "IMAGE_PATH=${IMAGE_PATH}" >> $GITHUB_ENV
 
         DEVICE_TREE_URL="${{ inputs.DEVICE_TREE }}"
+
         if [[ "${DEVICE_TREE_URL}" == *.git ]]; then
           DEVICE_TREE_URL="${DEVICE_TREE_URL%.git}"
         fi
+
         echo "DEVICE_TREE_URL=${DEVICE_TREE_URL}" >> $GITHUB_ENV
 
+
+    # ============================================================
+    # UPLOAD RELEASE
+    # ============================================================
+
     - name: Upload to Release
+      if: success()
       uses: softprops/action-gh-release@master
       with:
         files: |
           ${{ env.IMAGE_PATH }}
+
         name: TWRP Recovery for ${{ inputs.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
+
         tag_name: ${{ github.run_id }}
+
         body: |
           ## TWRP Recovery Build - Unofficial
+
           Build: ${{ inputs.MANIFEST_BRANCH }}
+
           Target: ${{ inputs.BUILD_TARGET }}
+
           Device: [Device Tree/Branch](${{ env.DEVICE_TREE_URL }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
+
           Commit: Most recent [commit](${{ env.DEVICE_TREE_URL }}/commit/${{ env.COMMIT_ID }}) during building.
