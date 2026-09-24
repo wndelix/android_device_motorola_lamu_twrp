@@ -8,6 +8,10 @@ DEVICE_PATH := device/motorola/lamu
 # Generic ramdisk
 $(call inherit-product, $(SRC_TARGET_DIR)/product/generic_ramdisk.mk)
 
+# Task profiles
+PRODUCT_PACKAGES += \
+    task_profiles.json
+
 # Enable project quotas and casefolding for emulated storage without sdcardfs
 $(call inherit-product, $(SRC_TARGET_DIR)/product/emulated_storage.mk)
 
