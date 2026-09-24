@@ -103,7 +103,6 @@ jobs:
 
         rm -rf scripts
 
-        # Garante que o comando repo esteja disponível
         if ! command -v repo >/dev/null 2>&1; then
           sudo curl -fsSL \
             https://storage.googleapis.com/git-repo-downloads/repo \
@@ -144,7 +143,6 @@ jobs:
         echo "CCache:"
         ccache --version | head -n 1 || true
 
-        # Redundant apt cleanup
         sudo apt autoclean >/dev/null || true
         sudo apt autoremove -qy 2>/dev/null || true
         sudo rm -rf /var/cache/apt/archives/ 2>/dev/null || true
@@ -306,6 +304,8 @@ jobs:
 
     - name: Diagnose Device Tree
       run: |
+        set -e
+
         cd ${GITHUB_WORKSPACE}/TWRP
 
         echo
@@ -327,12 +327,43 @@ jobs:
 
         echo
         echo "=========================================="
+        echo " DEVICE MAKEFILES"
+        echo "=========================================="
+
+        find "${{ inputs.DEVICE_PATH }}" \
+          -maxdepth 3 \
+          -type f \
+          \( \
+            -name "device.mk" \
+            -o -name "AndroidProducts.mk" \
+            -o -name "*.mk" \
+            -o -name "*.bp" \
+            -o -name "*product*" \
+            -o -name "*twrp*" \
+          \) \
+          -print \
+          | sort
+
+        echo
+        echo "=========================================="
+        echo " PRODUCT_PACKAGES IN DEVICE TREE"
+        echo "=========================================="
+
+        grep -R -n \
+          "PRODUCT_PACKAGES" \
+          "${{ inputs.DEVICE_PATH }}" \
+          2>/dev/null || true
+
+        echo
+        echo "=========================================="
         echo " TASK PROFILES IN DEVICE TREE"
         echo "=========================================="
 
         find "${{ inputs.DEVICE_PATH }}" \
-          \( -name "task_profiles.json" \
-          -o -name "task_profiles_*.json" \) \
+          \( \
+            -name "task_profiles.json" \
+            -o -name "task_profiles_*.json" \
+          \) \
           -print
 
         echo
@@ -356,6 +387,8 @@ jobs:
 
     - name: Diagnose Source Task Profiles
       run: |
+        set -e
+
         cd ${GITHUB_WORKSPACE}/TWRP
 
         echo
@@ -363,11 +396,14 @@ jobs:
         echo " SOURCE TASK PROFILES"
         echo "=========================================="
 
+        echo
         echo "--- Files ---"
 
         find system/core/libprocessgroup/profiles \
-          \( -name "task_profiles.json" \
-          -o -name "task_profiles_*.json" \) \
+          \( \
+            -name "task_profiles.json" \
+            -o -name "task_profiles_*.json" \
+          \) \
           -print \
           2>/dev/null || true
 
@@ -375,7 +411,7 @@ jobs:
         echo "--- Android.bp ---"
 
         if [[ -f system/core/libprocessgroup/profiles/Android.bp ]]; then
-          sed -n '1,180p' \
+          sed -n '1,240p' \
             system/core/libprocessgroup/profiles/Android.bp
         else
           echo "Android.bp NOT FOUND"
@@ -386,7 +422,8 @@ jobs:
 
         grep -R \
           'name: "task_profiles.json"' \
-          -n system/core/libprocessgroup \
+          -n \
+          system/core/libprocessgroup \
           2>/dev/null || true
 
         echo
@@ -398,8 +435,9 @@ jobs:
           --exclude-dir=.git \
           --exclude-dir=.repo \
           --exclude-dir=out \
-          system/core/libprocessgroup \
-          2>/dev/null || true
+          . \
+          2>/dev/null \
+          | head -n 300 || true
 
 
     # ============================================================
@@ -471,6 +509,10 @@ jobs:
 
         echo "OUT_DIR=${OUT_DIR:-out}"
         echo "PRODUCT_OUT=${PRODUCT_OUT:-not-set}"
+        echo "TARGET_PRODUCT=${TARGET_PRODUCT:-not-set}"
+        echo "TARGET_DEVICE=${TARGET_DEVICE:-not-set}"
+        echo "TARGET_BUILD_VARIANT=${TARGET_BUILD_VARIANT:-not-set}"
+        echo "TARGET_BUILD_APPS=${TARGET_BUILD_APPS:-not-set}"
 
         # --------------------------------------------------------
         # CHECK SOURCE TASK PROFILES
@@ -482,10 +524,58 @@ jobs:
         echo "=========================================="
 
         find system/core/libprocessgroup/profiles \
-          \( -name "task_profiles.json" \
-          -o -name "task_profiles_*.json" \) \
+          \( \
+            -name "task_profiles.json" \
+            -o -name "task_profiles_*.json" \
+          \) \
           -print \
           2>/dev/null || true
+
+        # --------------------------------------------------------
+        # CHECK PRODUCT CONFIGURATION
+        # --------------------------------------------------------
+
+        echo
+        echo "=========================================="
+        echo " PRODUCT CONFIGURATION"
+        echo "=========================================="
+
+        echo
+        echo "--- PRODUCT_PACKAGES ---"
+
+        grep -R -n \
+          "PRODUCT_PACKAGES" \
+          device/motorola/lamu \
+          vendor/twrp \
+          build/make/target/product \
+          2>/dev/null \
+          | head -n 300 || true
+
+        echo
+        echo "--- task_profiles references in product configuration ---"
+
+        grep -R -n \
+          "task_profiles" \
+          device/motorola/lamu \
+          vendor/twrp \
+          build/make \
+          system/core \
+          2>/dev/null \
+          | head -n 300 || true
+
+        echo
+        echo "--- Device makefiles ---"
+
+        find device/motorola/lamu \
+          -maxdepth 3 \
+          -type f \
+          \( \
+            -name "*.mk" \
+            -o -name "*.bp" \
+            -o -name "*.xml" \
+          \) \
+          -print \
+          | sort
 
         # --------------------------------------------------------
         # BUILD
@@ -510,20 +600,43 @@ jobs:
         echo "=========================================="
 
         echo
-        echo "--- PRODUCT_OUT ---"
+        echo "--- BUILD STATUS ---"
+        echo "Build exit status: $BUILD_STATUS"
 
+        echo
+        echo "--- OUT_DIR ---"
+        echo "${OUT_DIR:-out}"
+
+        echo
+        echo "--- PRODUCT_OUT ---"
         echo "${PRODUCT_OUT:-not-set}"
 
         PRODUCT_DIR="${PRODUCT_OUT:-out/target/product/${{ inputs.DEVICE_NAME }}}"
 
         echo
-        echo "--- task_profiles in PRODUCT_OUT ---"
+        echo "--- PRODUCT DIRECTORY ---"
+        echo "$PRODUCT_DIR"
+
+        # --------------------------------------------------------
+        # TASK PROFILES IN PRODUCT OUT
+        # --------------------------------------------------------
+
+        echo
+        echo "=========================================="
+        echo " TASK PROFILES IN PRODUCT_OUT"
+        echo "=========================================="
 
         find "$PRODUCT_DIR" \
-          \( -name "task_profiles.json" \
-          -o -name "task_profiles_*.json" \) \
+          \( \
+            -name "task_profiles.json" \
+            -o -name "task_profiles_*.json" \
+          \) \
           -print \
           2>/dev/null || true
+
+        # --------------------------------------------------------
+        # EXPECTED FILE
+        # --------------------------------------------------------
 
         echo
         echo "=========================================="
@@ -548,17 +661,27 @@ jobs:
           echo "NOT FOUND"
         fi
 
+        # --------------------------------------------------------
+        # SOURCE FILES
+        # --------------------------------------------------------
+
         echo
         echo "=========================================="
         echo " SOURCE FILES"
         echo "=========================================="
 
         find . \
-          \( -name "task_profiles.json" \
-          -o -name "task_profiles_*.json" \) \
+          \( \
+            -name "task_profiles.json" \
+            -o -name "task_profiles_*.json" \
+          \) \
           -not -path "./.repo/*" \
           -print \
           2>/dev/null || true
+
+        # --------------------------------------------------------
+        # DEVICE TREE FILE
+        # --------------------------------------------------------
 
         echo
         echo "=========================================="
@@ -568,6 +691,7 @@ jobs:
         DEVICE_TASK_PROFILE="${{ inputs.DEVICE_PATH }}/recovery/root/system/etc/task_profiles.json"
 
         if [[ -f "$DEVICE_TASK_PROFILE" ]]; then
+          echo "File:"
           ls -lh "$DEVICE_TASK_PROFILE"
 
           echo
@@ -576,6 +700,10 @@ jobs:
         else
           echo "Device tree task_profiles.json NOT FOUND"
         fi
+
+        # --------------------------------------------------------
+        # COMPARE FILES
+        # --------------------------------------------------------
 
         echo
         echo "=========================================="
@@ -588,11 +716,15 @@ jobs:
         if [[ -f "$SOURCE_TASK_PROFILE" ]]; then
           echo "task_profiles.json:"
           sha256sum "$SOURCE_TASK_PROFILE"
+        else
+          echo "task_profiles.json source NOT FOUND"
         fi
 
         if [[ -f "$SOURCE_TASK_PROFILE_30" ]]; then
           echo "task_profiles_30.json:"
           sha256sum "$SOURCE_TASK_PROFILE_30"
+        else
+          echo "task_profiles_30.json source NOT FOUND"
         fi
 
         if [[ -f "$DEVICE_TASK_PROFILE" ]]; then
@@ -600,16 +732,25 @@ jobs:
           sha256sum "$DEVICE_TASK_PROFILE"
         fi
 
+        # --------------------------------------------------------
+        # SYSTEM ETC
+        # --------------------------------------------------------
+
         echo
         echo "=========================================="
         echo " SYSTEM/ETC CONTENT"
         echo "=========================================="
 
         if [[ -d "$PRODUCT_DIR/system/etc" ]]; then
-          ls -lah "$PRODUCT_DIR/system/etc" | head -n 100
+          ls -lah "$PRODUCT_DIR/system/etc" \
+            | head -n 150
         else
           echo "$PRODUCT_DIR/system/etc does not exist"
         fi
+
+        # --------------------------------------------------------
+        # RECOVERY ROOT
+        # --------------------------------------------------------
 
         echo
         echo "=========================================="
@@ -618,32 +759,121 @@ jobs:
 
         if [[ -d "$PRODUCT_DIR/recovery/root/system/etc" ]]; then
           find "$PRODUCT_DIR/recovery/root/system/etc" \
-            -maxdepth 3 \
+            -maxdepth 4 \
             -iname "*task*" \
             -print \
             2>/dev/null || true
+        else
+          echo "recovery/root/system/etc does not exist"
         fi
+
+        # --------------------------------------------------------
+        # SOONG OUTPUT
+        # --------------------------------------------------------
 
         echo
         echo "=========================================="
-        echo " NINJA REFERENCES"
+        echo " SOONG OUTPUT REFERENCES"
         echo "=========================================="
 
-        if [[ -f build.ninja ]]; then
-          grep -n \
-            "task_profiles.json" \
-            build.ninja \
-            2>/dev/null | head -n 100 || true
+        if [[ -d out/soong ]]; then
+
+          echo
+          echo "--- Files containing task_profiles ---"
+
+          find out/soong \
+            -type f \
+            \( \
+              -name "*.ninja" \
+              -o -name "*.mk" \
+              -o -name "*.json" \
+              -o -name "*.txt" \
+            \) \
+            -print0 2>/dev/null \
+            | xargs -0 grep -l \
+              "task_profiles.json" \
+              2>/dev/null \
+            | head -n 100 || true
+
+          echo
+          echo "--- Ninja references ---"
+
+          find out/soong \
+            -type f \
+            -name "*.ninja" \
+            -print0 2>/dev/null \
+            | xargs -0 grep -n \
+              "task_profiles.json" \
+              2>/dev/null \
+            | head -n 200 || true
+
+        else
+          echo "out/soong does not exist"
         fi
+
+        # --------------------------------------------------------
+        # GLOBAL NINJA
+        # --------------------------------------------------------
+
+        echo
+        echo "=========================================="
+        echo " GLOBAL NINJA REFERENCES"
+        echo "=========================================="
+
+        find out \
+          -type f \
+          -name "*.ninja" \
+          -print0 2>/dev/null \
+          | xargs -0 grep -n \
+            "task_profiles.json" \
+            2>/dev/null \
+          | head -n 200 || true
+
+        # --------------------------------------------------------
+        # INSTALL COMMAND
+        # --------------------------------------------------------
+
+        echo
+        echo "=========================================="
+        echo " TWRP RAMDISK INSTALL COMMAND"
+        echo "=========================================="
+
+        find out \
+          -type f \
+          \( \
+            -name "*.ninja" \
+            -o -name "*.mk" \
+          \) \
+          -print0 2>/dev/null \
+          | xargs -0 grep -n \
+            "task_profiles_30.json" \
+            2>/dev/null \
+          | head -n 100 || true
+
+        # --------------------------------------------------------
+        # TIMESTAMP
+        # --------------------------------------------------------
+
+        echo
+        echo "=========================================="
+        echo " TWRP RAMDISK TIMESTAMP"
+        echo "=========================================="
 
         if [[ -f "$PRODUCT_DIR/obj/FAKE/twrp_ramdisk_intermediates/twrp_ramdisk-timestamp" ]]; then
-          echo
           echo "twrp_ramdisk timestamp exists."
+          ls -lh \
+            "$PRODUCT_DIR/obj/FAKE/twrp_ramdisk_intermediates/twrp_ramdisk-timestamp"
+        else
+          echo "twrp_ramdisk timestamp NOT FOUND."
         fi
+
+        # --------------------------------------------------------
+        # BUILD STATUS
+        # --------------------------------------------------------
 
         echo
         echo "=========================================="
-        echo " BUILD STATUS"
+        echo " FINAL BUILD STATUS"
         echo "=========================================="
 
         echo "Build exit status: $BUILD_STATUS"
@@ -658,6 +888,8 @@ jobs:
     - name: Set Release Properties
       if: success()
       run: |
+        set -e
+
         echo "BUILD_DATE=$(TZ=America/Sao_Paulo date +%Y%m%d)" >> $GITHUB_ENV
 
         cd ${GITHUB_WORKSPACE}/TWRP
