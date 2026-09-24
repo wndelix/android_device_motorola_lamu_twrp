@@ -8,10 +8,6 @@ DEVICE_PATH := device/motorola/lamu
 # Generic ramdisk
 $(call inherit-product, $(SRC_TARGET_DIR)/product/generic_ramdisk.mk)
 
-# Task profiles
-PRODUCT_PACKAGES += \
-    task_profiles.json
-
 # Enable project quotas and casefolding for emulated storage without sdcardfs
 $(call inherit-product, $(SRC_TARGET_DIR)/product/emulated_storage.mk)
 
@@ -96,3 +92,6 @@ TARGET_BOARD_PLATFORM := mt6768
 PRODUCT_COPY_FILES += \
     $(DEVICE_PATH)/recovery/root/first_stage_ramdisk/fstab.mt6768:$(TARGET_COPY_OUT_VENDOR_RAMDISK)/first_stage_ramdisk/fstab.mt6768
 
+# Task profiles
+PRODUCT_COPY_FILES += \
+    $(DEVICE_PATH)/recovery/root/system/etc/task_profiles.json:system/etc/task_profiles.json
