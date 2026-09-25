@@ -167,6 +167,13 @@ BOARD_AVB_VBMETA_VENDOR_ROLLBACK_INDEX_LOCATION := 3
 TARGET_USES_LOGD := true
 TARGET_RECOVERY_DEVICE_MODULES += debuggerd
 TARGET_RECOVERY_DEVICE_MODULES += strace
+
+# Workaround: TWRP unconditionally copies task_profiles.json into the recovery
+# ramdisk (prebuilt/Android.mk), but the module is only pulled into the build
+# when TW_INCLUDE_CRYPTO is set. Force it to be built/installed here.
+TARGET_RECOVERY_DEVICE_MODULES += \
+    task_profiles.json \
+    cgroups.json
 RECOVERY_BINARY_SOURCE_FILES += $(TARGET_OUT_EXECUTABLES)/debuggerd
 RECOVERY_BINARY_SOURCE_FILES += $(TARGET_OUT_EXECUTABLES)/strace
 
