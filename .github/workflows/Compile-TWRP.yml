@@ -48,26 +48,39 @@ on:
         required: true
         default: true
 
+# Cancela execucoes antigas do mesmo dispositivo/branch ao iniciar uma nova
+concurrency:
+  group: twrp-${{ inputs.DEVICE_NAME }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build TWRP for ${{ inputs.DEVICE_NAME }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    permissions:
-      contents: write
     steps:
+    # slimhub + maximize-build-space: libera ~60GB de disco para o build
     - name: Clean-up
       uses: rokibhasansagar/slimhub_actions@main
 
+    - name: Maximize build space
+      uses: easimon/maximize-build-space@master
+      with:
+        root-reserve-mb: '3072'
+
     - name: Build Environment
       run: |
-        sudo apt install aria2 linux-modules-extra-$(uname -r) zram-tools -y
-        git clone https://gitlab.com/OrangeFox/misc/scripts.git -b master
+        sudo apt install linux-modules-extra-$(uname -r) zram-tools -y
+        git clone --depth=1 https://gitlab.com/OrangeFox/misc/scripts.git -b master
         cd scripts
         sudo bash setup/android_build_env.sh
         cd .. && rm -rf scripts
-        # Garante que o comando `repo` esteja disponível
+        # Garante que o comando `repo` esteja disponivel
         if ! command -v repo >/dev/null 2>&1; then
           sudo curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
           sudo chmod a+rx /usr/local/bin/repo
@@ -77,19 +90,11 @@ jobs:
         sudo apt autoremove -qy 2>/dev/null || true
         sudo rm -rf /var/cache/apt/archives/ 2>/dev/null || true
 
-    - name: Maximize build space
-      uses: easimon/maximize-build-space@master
-      with:
-        root-reserve-mb: '3072'
-
-    - name: Checkout
-      uses: actions/checkout@main
-
     - name: Setup ccache
       uses: hendrikmuhs/ccache-action@v1.2
       if: inputs.USE_CCACHE
       with:
-        max-size: "2G"
+        max-size: "4G"
         create-symlink: true
 
     - name: Setup zram
@@ -108,12 +113,12 @@ jobs:
         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
         git config --global color.ui false
         repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ inputs.MANIFEST_BRANCH }}
-        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
 
     - name: Clone Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/TWRP
-        git clone ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
+        git clone --depth=1 ${{ inputs.DEVICE_TREE }} -b ${{ inputs.DEVICE_TREE_BRANCH }} ./${{ inputs.DEVICE_PATH }}
         cd ${{ inputs.DEVICE_PATH }}
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
@@ -124,6 +129,9 @@ jobs:
         if [[ ${{ inputs.USE_CCACHE }} == true ]]; then
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
+          export CCACHE_COMPRESS=1
+          export CCACHE_COMPRESSLEVEL=6
+          ccache -s || true
           if [[ -f build/soong/ui/build/sandbox_linux.go ]]; then
             sed -i 's/return sandboxConfig\.working/return false/g' build/soong/ui/build/sandbox_linux.go
           fi
@@ -132,12 +140,13 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         set -e
-        lunch twrp_${{ inputs.DEVICE_NAME }}-ap2a-eng && mka adbd ${{ inputs.BUILD_TARGET }}image
+        lunch twrp_${{ inputs.DEVICE_NAME }}-ap2a-eng
+        mka -j$(nproc --all) adbd ${{ inputs.BUILD_TARGET }}image
+        ccache -s || true
 
     - name: Set Release Properties
       run: |
         echo "BUILD_DATE=$(TZ=America/Sao_Paulo date +%Y%m%d)" >> $GITHUB_ENV
-        cd ${GITHUB_WORKSPACE}/TWRP
 
         # O nome do .img gerado varia conforme o target
         case "${{ inputs.BUILD_TARGET }}" in
@@ -155,6 +164,15 @@ jobs:
         fi
         echo "DEVICE_TREE_URL=${DEVICE_TREE_URL}" >> $GITHUB_ENV
 
+    # Artefato como backup: disponivel mesmo se o upload do release falhar
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.DEVICE_NAME }}-${{ env.IMAGE_PATH ##*/ }}
+        path: ${{ env.IMAGE_PATH }}
+        retention-days: 7
+        compression-level: 0
+
     - name: Upload to Release
       uses: softprops/action-gh-release@master
       with:
@@ -168,3 +186,16 @@ jobs:
           Target: ${{ inputs.BUILD_TARGET }}
           Device: [Device Tree/Branch](${{ env.DEVICE_TREE_URL }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
           Commit: Most recent [commit](${{ env.DEVICE_TREE_URL }}/commit/${{ env.COMMIT_ID }}) during building.
+
+    - name: Build Summary
+      if: always()
+      run: |
+        echo "## TWRP Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+        echo "| Device | ${{ inputs.DEVICE_NAME }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Target | ${{ inputs.BUILD_TARGET }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Manifest | ${{ inputs.MANIFEST_BRANCH }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Device tree | ${{ env.DEVICE_TREE_URL }}/tree/${{ inputs.DEVICE_TREE_BRANCH }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Result | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
